@@ -16,7 +16,7 @@ Native Objective-C Runtime & Apple Blocks ABI bridge for Geisha (`macOS` / `iOS`
 Add via CLI:
 
 ```sh
-geisha add https://github.com/geisha-lang/objc.gsa.git
+geisha add https://github.com/geisha-lang/objc.gsa.git --as objc
 ```
 
 Or in `geisha.toml`:

@@ -1,0 +1,16 @@
+name = "objc"
+version = "0.1.0"
+src_dir = "src"
+tests = ["tests/spec.gsa"]
+
+[target.native]
+c_sources = ["native/gs_objc.c"]
+
+[[target.native.when]]
+os = "macos"
+link_flags = ["-lobjc", "-framework", "Foundation"]
+
+[target.ios]
+c_sources = ["native/gs_objc.c"]
+link_flags = ["-lobjc"]
+frameworks = ["Foundation"]

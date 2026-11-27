@@ -1,0 +1,89 @@
+// Verification suite for `objc.gsa` (`tests/spec.gsa`).
+
+use std.result.{Result, Ok, Err}
+use std.str.intToStr
+use sys.io.eprintLn
+use sys.proc.exit
+
+use objc.{
+    objcClass, objcSel, idAdopt, withAutoreleasePool,
+    nsString, fromNSString,
+    objcAllocateClass, objcAddMethod, objcRegisterClass,
+    objcSetAssocHandle, objcGetAssocHandle,
+    objcBlock0,
+    msgSend0, msgSendInt0
+}
+
+extern data CGPoint { x: Float, y: Float }
+extern data CGSize { w: Float, h: Float }
+extern data CGRect { origin: CGPoint, size: CGSize }
+
+extern "objc_msgSend" def msgSendValueWithRect(cls: Ptr, sel: Ptr, rect: CGRect): Ptr
+extern "objc_msgSend" def msgSendRectValue(obj: Ptr, sel: Ptr): CGRect
+extern "dispatch_get_global_queue" def c_dispatch_global_queue(ident: Int64, flags: Int64): Ptr
+extern "dispatch_sync" def c_dispatch_sync(queue: Ptr, block: ScopedPtr): Void
+
+def gAssocKey: Ptr = ptrAllocBytes(8)
+
+def customComputeImp(self: Ptr, _cmd: Ptr): Int = {
+    let _ = _cmd;
+    let h = objcGetAssocHandle(self, gAssocKey);
+    let cell: Cell Int = gcHandleGet(h);
+    cellSet(cell, cellGet(cell) + 10);
+    cellGet(cell)
+}
+
+extern init def registerSpecClass(): Void = {
+    let cls = objcAllocateClass("NSObject", "GeishaObjcSpecClass");
+    if (!ptrIsNull(cls)) {
+        let _ = objcAddMethod(cls, "computeValue", cFnPtr(customComputeImp), "i@:");
+        objcRegisterClass(cls)
+    } else ()
+}
+
+def assertTrue(label: String, ok: Bool): Result Void String =
+    if (ok) Ok(()) else Err("ASSERT FAILED: " + label)
+
+def runAll(): Result Void String = withAutoreleasePool(() -> {
+    // 1. NSString UTF-8 round-trip (ASCII + CJK)
+    let ns = nsString("句序-Slate-Talus");
+    assertTrue("NSString CJK round-trip", fromNSString(ns) == "句序-Slate-Talus")?;
+    printLn("  [PASS] NSString UTF-8 / CJK round-trip");
+
+    // 2. CGRect HFA pass & return through Apple Foundation `NSValue`
+    let nsValCls = objcClass("NSValue");
+    let inRect = CGRect { origin: CGPoint { x: 12.0, y: 34.0 }, size: CGSize { w: 100.0, h: 200.0 } };
+    let valObj = msgSendValueWithRect(nsValCls, objcSel("valueWithRect:"), inRect);
+    let outRect = msgSendRectValue(valObj, objcSel("rectValue"));
+    let rectSum = floatToInt(outRect.origin.x + outRect.origin.y + outRect.size.w + outRect.size.h);
+    assertTrue("CGRect NSValue round-trip (got " + intToStr(rectSum) + ")", rectSum == 346)?;
+    printLn("  [PASS] CGRect HFA objc_msgSend via Foundation NSValue");
+
+    // 3. Dynamic ObjC subclass registered in `extern init` + associated GC handle
+    let testCls = objcClass("GeishaObjcSpecClass");
+    let raw = msgSend0(msgSend0(testCls, objcSel("alloc")), objcSel("init"));
+    let st = cellNew(32);
+    objcSetAssocHandle(raw, gAssocKey, gcHandleNew(st));
+    let v = msgSendInt0(raw, objcSel("computeValue"));
+    let _ = idAdopt(raw);
+    assertTrue("dynamic ObjC subclass + assoc GC handle (got " + intToStr(v) + ")", v == 42)?;
+    printLn("  [PASS] extern init dynamic ObjC subclass + auto-releasing associated GC handle");
+
+    // 4. Apple Objective-C Block executed via libdispatch `dispatch_sync`
+    let blkCounter = cellNew(0);
+    let blk = objcBlock0(() -> cellSet(blkCounter, cellGet(blkCounter) + 77));
+    let q = c_dispatch_global_queue(intToI64(0), intToI64(0));
+    c_dispatch_sync(q, blk);
+    assertTrue("libdispatch Objective-C Block (got " + intToStr(cellGet(blkCounter)) + ")", cellGet(blkCounter) == 77)?;
+    printLn("  [PASS] Apple Objective-C Block executed on libdispatch queue");
+
+    Ok(())
+})
+
+def main(): Void = {
+    printLn("Running objc.gsa test suite...");
+    match runAll() {
+        Ok(_) -> printLn("objc.gsa: all tests passed!"),
+        Err(e) -> { eprintLn("FAIL: " + e); exit(1) },
+    }
+}

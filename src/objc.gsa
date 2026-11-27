@@ -1,0 +1,229 @@
+/// Native Objective-C Runtime & Apple Blocks ABI bridge (`objc`).
+///
+/// Automatically links `-lobjc` and `-framework Foundation` on macOS and iOS.
+/// On non-Apple platforms these entry points are no-op stubs so cross-platform
+/// typechecking remains portable.
+
+use std.option.{Option, Some, None}
+
+/// Phantom-typed, GC-managed Objective-C object handle.
+/// Automatically calls `objc_release` when collected by Geisha's GC.
+pub data Id a (ForeignPtr)
+
+/// Phantom marker for `NSObject`.
+pub data NSObject { NSObjectTag }
+
+/// Phantom marker for `NSString`.
+pub data NSString { NSStringTag }
+
+extern "objc_getClass" def c_objc_getClass(name: String): Ptr
+extern "sel_registerName" def c_sel_registerName(name: String): Ptr
+extern "objc_allocateClassPair" def c_objc_allocateClassPair(superCls: Ptr, name: String, extraBytes: Int64): Ptr
+extern "class_addMethod" def c_class_addMethod(cls: Ptr, sel: Ptr, imp: Ptr, types: String): Bool
+extern "objc_registerClassPair" def c_objc_registerClassPair(cls: Ptr): Void
+extern "objc_retain" def c_objc_retain(obj: Ptr): Ptr
+extern "objc_release" def c_objc_release(obj: Ptr): Void
+
+extern "gs_objc_autorelease_push" def c_autorelease_push(): Ptr
+extern "gs_objc_autorelease_pop" def c_autorelease_pop(pool: Ptr): Void
+extern noalloc "gs_objc_retain_foreign" def c_objc_retain_foreign(obj: Ptr, extBytes: Int64): ForeignPtr
+extern noalloc "gs_objc_adopt_foreign" def c_objc_adopt_foreign(obj: Ptr, extBytes: Int64): ForeignPtr
+extern "gs_objc_nsstring_from_utf8" def c_nsstring_from_utf8(utf8: String): Ptr
+extern "gs_objc_nsstring_to_utf8" def c_nsstring_to_utf8(nsstr: ScopedPtr): Ptr
+extern "gs_objc_add_protocol" def c_objc_add_protocol(cls: Ptr, protoName: String): Int
+extern "gs_objc_set_associated_handle" def c_objc_set_assoc_handle(obj: Ptr, key: Ptr, handle: Int64): Void
+extern "gs_objc_get_associated_handle" def c_objc_get_assoc_handle(obj: Ptr, key: Ptr): Int64
+
+extern noalloc "gs_objc_block_new_0" def c_block_new_0(tramp: Ptr, handle: Int64): ForeignPtr
+extern noalloc "gs_objc_block_new_1p" def c_block_new_1p(tramp: Ptr, handle: Int64): ForeignPtr
+extern noalloc "gs_objc_block_new_2p" def c_block_new_2p(tramp: Ptr, handle: Int64): ForeignPtr
+extern noalloc "gs_objc_block_new_1i64" def c_block_new_1i64(tramp: Ptr, handle: Int64): ForeignPtr
+extern noalloc "gs_objc_block_new_1b" def c_block_new_1b(tramp: Ptr, handle: Int64): ForeignPtr
+extern noalloc "gs_objc_block_new_custom" def c_block_new_custom(customInvoke: Ptr, handle: Int64): ForeignPtr
+extern noalloc "gs_objc_block_get_handle" def c_block_get_handle(blk: Ptr): Int64
+
+extern "objc_msgSend" def c_msgSend0(obj: Ptr, sel: Ptr): Ptr
+extern "objc_msgSend" def c_msgSend1Ptr(obj: Ptr, sel: Ptr, a0: Ptr): Ptr
+extern "objc_msgSend" def c_msgSend2Ptr(obj: Ptr, sel: Ptr, a0: Ptr, a1: Ptr): Ptr
+extern "objc_msgSend" def c_msgSend3Ptr(obj: Ptr, sel: Ptr, a0: Ptr, a1: Ptr, a2: Ptr): Ptr
+extern "objc_msgSend" def c_msgSend1Int(obj: Ptr, sel: Ptr, a0: Int): Ptr
+extern "objc_msgSend" def c_msgSend1I64(obj: Ptr, sel: Ptr, a0: Int64): Ptr
+extern "objc_msgSend" def c_msgSend1Float(obj: Ptr, sel: Ptr, a0: Float): Ptr
+extern "objc_msgSend" def c_msgSend1Bool(obj: Ptr, sel: Ptr, a0: Bool): Ptr
+extern "objc_msgSend" def c_msgSendVoid0(obj: Ptr, sel: Ptr): Void
+extern "objc_msgSend" def c_msgSendVoid1Ptr(obj: Ptr, sel: Ptr, a0: Ptr): Void
+extern "objc_msgSend" def c_msgSendVoid2Ptr(obj: Ptr, sel: Ptr, a0: Ptr, a1: Ptr): Void
+extern "objc_msgSend" def c_msgSendVoid1Int(obj: Ptr, sel: Ptr, a0: Int): Void
+extern "objc_msgSend" def c_msgSendVoid1I64(obj: Ptr, sel: Ptr, a0: Int64): Void
+extern "objc_msgSend" def c_msgSendVoid1Bool(obj: Ptr, sel: Ptr, a0: Bool): Void
+extern "objc_msgSend" def c_msgSendVoid1Float(obj: Ptr, sel: Ptr, a0: Float): Void
+extern "objc_msgSend" def c_msgSendBool0(obj: Ptr, sel: Ptr): Bool
+extern "objc_msgSend" def c_msgSendInt0(obj: Ptr, sel: Ptr): Int
+extern "objc_msgSend" def c_msgSendI64_0(obj: Ptr, sel: Ptr): Int64
+extern "objc_msgSend" def c_msgSendFloat0(obj: Ptr, sel: Ptr): Float
+
+/// Look up an Objective-C `Class` pointer by name (e.g. `"NSWindow"`, `"UIView"`).
+pub def objcClass(name: String): Ptr = c_objc_getClass(name)
+
+/// Register/intern an Objective-C `SEL` selector by name (e.g. `"initWithFrame:"`).
+pub def objcSel(name: String): Ptr = c_sel_registerName(name)
+
+/// Manually retain a raw Objective-C `id`.
+pub def objcRetainRaw(obj: Ptr): Ptr = c_objc_retain(obj)
+
+/// Manually release a raw Objective-C `id`.
+pub def objcReleaseRaw(obj: Ptr): Void = c_objc_release(obj)
+
+/// Retain a borrowed raw Objective-C object (`+0` return) and wrap it in a GC-managed `Id a`.
+pub def idRetain(raw: Ptr): Id a = Id(c_objc_retain_foreign(raw, intToI64(64)))
+
+/// Retain a borrowed raw Objective-C object with explicit external memory accounting (bytes).
+pub def idRetainBytes(raw: Ptr, extBytes: Int64): Id a = Id(c_objc_retain_foreign(raw, extBytes))
+
+/// Adopt an already-owned Objective-C object (`+1` return from `alloc`/`init`/`new`/`copy`) into a GC-managed `Id a`.
+pub def idAdopt(raw: Ptr): Id a = Id(c_objc_adopt_foreign(raw, intToI64(64)))
+
+/// Adopt an owned Objective-C object with explicit external memory accounting (bytes).
+pub def idAdoptBytes(raw: Ptr, extBytes: Int64): Id a = Id(c_objc_adopt_foreign(raw, extBytes))
+
+/// Retain a nullable raw Objective-C pointer into `Option (Id a)`.
+pub def idRetainOpt(raw: Ptr): Option (Id a) =
+    if (ptrIsNull(raw)) None else Some(idRetain(raw))
+
+/// Adopt a nullable owned Objective-C pointer into `Option (Id a)`.
+pub def idAdoptOpt(raw: Ptr): Option (Id a) =
+    if (ptrIsNull(raw)) None else Some(idAdopt(raw))
+
+/// Extract the underlying `ForeignPtr` from an `Id a`.
+pub def idForeignPtr(obj: Id a): ForeignPtr = match obj {
+    Id(fp) -> fp,
+}
+
+/// Borrow the raw Objective-C pointer of an `Id a` as a `ScopedPtr` with compiler-enforced keep-alive.
+pub def withId(obj: Id a, f: ScopedPtr -> r): r = match obj {
+    Id(fp) -> withForeignPtr(fp, f),
+}
+
+/// Execute `f` inside an Objective-C `@autoreleasepool` scope.
+pub def withAutoreleasePool(f: () -> r): r = {
+    let pool = c_autorelease_push();
+    let res = f();
+    c_autorelease_pop(pool);
+    res
+}
+
+/// Create a GC-managed `NSString` from a Geisha UTF-8 `String`.
+pub def nsString(s: String): Id NSString = idAdopt(c_nsstring_from_utf8(s))
+
+/// Copy a GC-managed `NSString` into a Geisha UTF-8 `String`.
+pub def fromNSString(s: Id NSString): String =
+    withId(s, (p) -> {
+        let cstr = c_nsstring_to_utf8(p);
+        if (ptrIsNull(cstr)) "" else ptrToString(cstr)
+    })
+
+/// Copy a raw `NSString *` pointer into a Geisha UTF-8 `String`.
+pub def fromNSStringPtr(raw: Ptr): String =
+    if (ptrIsNull(raw)) ""
+    else fromNSString(idRetain(raw))
+
+/// Allocate a new Objective-C subclass of `superName` named `className`.
+pub def objcAllocateClass(superName: String, className: String): Ptr = {
+    let sup = c_objc_getClass(superName);
+    if (ptrIsNull(sup)) ptrNull()
+    else c_objc_allocateClassPair(sup, className, intToI64(0))
+}
+
+/// Add a method implementation (`imp` from `cFnPtr`) with ObjC type encoding `typeEnc` (e.g. `"v@:@"`).
+pub def objcAddMethod(cls: Ptr, selName: String, imp: Ptr, typeEnc: String): Bool =
+    c_class_addMethod(cls, c_sel_registerName(selName), imp, typeEnc)
+
+/// Attach an Objective-C protocol by name to a class under construction.
+pub def objcAddProtocol(cls: Ptr, protoName: String): Bool =
+    c_objc_add_protocol(cls, protoName) != 0
+
+/// Finalize and register a dynamically allocated Objective-C class with the runtime.
+pub def objcRegisterClass(cls: Ptr): Void = c_objc_registerClassPair(cls)
+
+/// Attach a GC handle (`gcHandleNew`) to any Objective-C object; automatically calls `gcHandleFree` on ObjC `dealloc`.
+pub def objcSetAssocHandle(obj: Ptr, key: Ptr, handle: Int64): Void =
+    c_objc_set_assoc_handle(obj, key, handle)
+
+/// Retrieve an associated GC handle previously attached via `objcSetAssocHandle` (0 if unset).
+pub def objcGetAssocHandle(obj: Ptr, key: Ptr): Int64 =
+    c_objc_get_assoc_handle(obj, key)
+
+def __gsBlkTramp0(h: Int64): Void = {
+    let f: () -> Void = gcHandleGet(h);
+    f()
+}
+
+def __gsBlkTramp1Ptr(h: Int64, a0: Ptr): Void = {
+    let f: Ptr -> Void = gcHandleGet(h);
+    f(a0)
+}
+
+def __gsBlkTramp2Ptr(h: Int64, a0: Ptr, a1: Ptr): Void = {
+    let f: (Ptr, Ptr) -> Void = gcHandleGet(h);
+    f(a0, a1)
+}
+
+def __gsBlkTramp1I64(h: Int64, a0: Int64): Void = {
+    let f: Int64 -> Void = gcHandleGet(h);
+    f(a0)
+}
+
+def __gsBlkTramp1Bool(h: Int64, a0: Int): Void = {
+    let f: Bool -> Void = gcHandleGet(h);
+    f(a0 != 0)
+}
+
+/// Create a heap-allocated Objective-C Block (`void (^)(void)`) backed by a Geisha closure.
+pub def objcBlock0(cb: () -> Void): ForeignPtr =
+    c_block_new_0(cFnPtr(__gsBlkTramp0), gcHandleNew(cb))
+
+/// Create a heap-allocated Objective-C Block (`void (^)(id)`) backed by a Geisha closure.
+pub def objcBlock1Ptr(cb: Ptr -> Void): ForeignPtr =
+    c_block_new_1p(cFnPtr(__gsBlkTramp1Ptr), gcHandleNew(cb))
+
+/// Create a heap-allocated Objective-C Block (`void (^)(id, id)` — e.g. ScreenCaptureKit / Speech completion handlers).
+pub def objcBlock2Ptr(cb: (Ptr, Ptr) -> Void): ForeignPtr =
+    c_block_new_2p(cFnPtr(__gsBlkTramp2Ptr), gcHandleNew(cb))
+
+/// Create a heap-allocated Objective-C Block (`void (^)(int64_t)`) backed by a Geisha closure.
+pub def objcBlock1I64(cb: Int64 -> Void): ForeignPtr =
+    c_block_new_1i64(cFnPtr(__gsBlkTramp1I64), gcHandleNew(cb))
+
+/// Create a heap-allocated Objective-C Block (`void (^)(BOOL)` — e.g. UIView animation completion).
+pub def objcBlock1Bool(cb: Bool -> Void): ForeignPtr =
+    c_block_new_1b(cFnPtr(__gsBlkTramp1Bool), gcHandleNew(cb))
+
+/// Create a custom-signature Objective-C Block with a user `cFnPtr` invoke function taking `(blockPtr: Ptr, ...)`.
+pub def objcBlockCustom(customInvoke: Ptr, handle: Int64): ForeignPtr =
+    c_block_new_custom(customInvoke, handle)
+
+/// Read the GC handle stored inside a custom Objective-C Block from within its invoke callback.
+pub def objcBlockHandle(blockPtr: Ptr): Int64 =
+    c_block_get_handle(blockPtr)
+
+/// Common typed `objc_msgSend` helpers (ARM64-safe, non-variadic).
+/// For custom struct signatures (`CGRect`, `CGPoint`, etc.), declare your own `extern "objc_msgSend" def ...`.
+pub def msgSend0(obj: Ptr, sel: Ptr): Ptr = c_msgSend0(obj, sel)
+pub def msgSend1Ptr(obj: Ptr, sel: Ptr, a0: Ptr): Ptr = c_msgSend1Ptr(obj, sel, a0)
+pub def msgSend2Ptr(obj: Ptr, sel: Ptr, a0: Ptr, a1: Ptr): Ptr = c_msgSend2Ptr(obj, sel, a0, a1)
+pub def msgSend3Ptr(obj: Ptr, sel: Ptr, a0: Ptr, a1: Ptr, a2: Ptr): Ptr = c_msgSend3Ptr(obj, sel, a0, a1, a2)
+pub def msgSend1Int(obj: Ptr, sel: Ptr, a0: Int): Ptr = c_msgSend1Int(obj, sel, a0)
+pub def msgSend1I64(obj: Ptr, sel: Ptr, a0: Int64): Ptr = c_msgSend1I64(obj, sel, a0)
+pub def msgSend1Float(obj: Ptr, sel: Ptr, a0: Float): Ptr = c_msgSend1Float(obj, sel, a0)
+pub def msgSend1Bool(obj: Ptr, sel: Ptr, a0: Bool): Ptr = c_msgSend1Bool(obj, sel, a0)
+pub def msgSendVoid0(obj: Ptr, sel: Ptr): Void = c_msgSendVoid0(obj, sel)
+pub def msgSendVoid1Ptr(obj: Ptr, sel: Ptr, a0: Ptr): Void = c_msgSendVoid1Ptr(obj, sel, a0)
+pub def msgSendVoid2Ptr(obj: Ptr, sel: Ptr, a0: Ptr, a1: Ptr): Void = c_msgSendVoid2Ptr(obj, sel, a0, a1)
+pub def msgSendVoid1Int(obj: Ptr, sel: Ptr, a0: Int): Void = c_msgSendVoid1Int(obj, sel, a0)
+pub def msgSendVoid1I64(obj: Ptr, sel: Ptr, a0: Int64): Void = c_msgSendVoid1I64(obj, sel, a0)
+pub def msgSendVoid1Bool(obj: Ptr, sel: Ptr, a0: Bool): Void = c_msgSendVoid1Bool(obj, sel, a0)
+pub def msgSendVoid1Float(obj: Ptr, sel: Ptr, a0: Float): Void = c_msgSendVoid1Float(obj, sel, a0)
+pub def msgSendBool0(obj: Ptr, sel: Ptr): Bool = c_msgSendBool0(obj, sel)
+pub def msgSendInt0(obj: Ptr, sel: Ptr): Int = c_msgSendInt0(obj, sel)
+pub def msgSendI64_0(obj: Ptr, sel: Ptr): Int64 = c_msgSendI64_0(obj, sel)
+pub def msgSendFloat0(obj: Ptr, sel: Ptr): Float = c_msgSendFloat0(obj, sel)

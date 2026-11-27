@@ -1,0 +1,99 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' }}
+
+jobs:
+  test-apple:
+    name: Test & iOS Sim Check (darwin-arm64)
+    runs-on: macos-15
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Ensure xz is installed
+        env:
+          HOMEBREW_NO_AUTO_UPDATE: "1"
+          HOMEBREW_NO_INSTALL_CLEANUP: "1"
+        run: |
+          command -v xz >/dev/null 2>&1 || brew install xz
+
+      - name: Resolve Geisha compiler commit
+        id: geisha-rev
+        run: |
+          SHA="$(git ls-remote https://github.com/geisha-lang/geisha.gsa.git refs/heads/main | awk '{print $1}')"
+          echo "sha=${SHA}" >> "$GITHUB_OUTPUT"
+
+      - name: Cache Geisha toolchain (macOS + iOS Simulator runtime)
+        id: cache-geisha
+        uses: actions/cache@v4
+        with:
+          path: ~/.geisha
+          key: geisha-objc-v1-${{ runner.os }}-${{ runner.arch }}-${{ steps.geisha-rev.outputs.sha }}
+
+      - name: Build Geisha toolchain (on cache miss)
+        if: steps.cache-geisha.outputs.cache-hit != 'true'
+        run: |
+          SRC="$(mktemp -d)"
+          git clone --depth 1 https://github.com/geisha-lang/geisha.gsa.git "$SRC"
+          make -C "$SRC" runtime runtime-ios-sim stage1 stage2
+          mkdir -p "$HOME/.geisha/bin" "$HOME/.geisha/lib"
+          cp "$SRC/build/geisha2" "$HOME/.geisha/bin/geisha"
+          cp "$SRC/build/libgeisha_runtime.a" "$HOME/.geisha/lib/libgeisha_runtime.a"
+          cp "$SRC/build/libgeisha_runtime_ios_sim.a" "$HOME/.geisha/lib/libgeisha_runtime_ios_sim.a"
+          rm -rf "$SRC"
+
+      - name: Add Geisha to PATH
+        run: echo "$HOME/.geisha/bin" >> "$GITHUB_PATH"
+
+      - name: Typecheck, API docs & macOS runtime test suite (default + stress GC)
+        env:
+          MACOSX_DEPLOYMENT_TARGET: "14.0"
+        run: |
+          geisha check
+          geisha doc objc >/dev/null
+          geisha test
+          GEISHA_GC_HEAP_WORDS=4096 geisha test
+
+      - name: Verify iOS Simulator .appex packaging & linkage ([target.ios])
+        run: |
+          IOS_SMOKE="$(mktemp -d)"
+          mkdir -p "$IOS_SMOKE/src"
+          cat > "$IOS_SMOKE/geisha.toml" << EOF
+          name = "objc_ios_smoke"
+          version = "0.1.0"
+          entry = "src/main.gsa"
+
+          [deps]
+          objc = { path = "$GITHUB_WORKSPACE" }
+
+          [target.ios]
+          bundle_id       = "com.geisha.objc.iossmoke"
+          bundle_name     = "ObjcIosSmoke"
+          min_os          = "16.0"
+          frameworks      = ["Foundation", "UIKit"]
+          is_extension    = true
+          extension_point = "com.apple.keyboard-service"
+          principal_class = "ObjcSmokeExtCtrl"
+          codesign        = "-"
+          EOF
+          cat > "$IOS_SMOKE/src/main.gsa" << 'EOF'
+          use objc.{withAutoreleasePool, nsString, fromNSString, objcAllocateClass, objcRegisterClass}
+
+          extern init def regSmokeCtrl(): Void = {
+              let cls = objcAllocateClass("UIInputViewController", "ObjcSmokeExtCtrl");
+              if (!ptrIsNull(cls)) objcRegisterClass(cls) else ()
+          }
+
+          pub def pingIos(): String = withAutoreleasePool(() -> fromNSString(nsString("ios-ok")))
+          EOF
+          (cd "$IOS_SMOKE" && geisha build --target ios-sim-app --runtime "$HOME/.geisha/lib/libgeisha_runtime_ios_sim.a")
+          test -x "$IOS_SMOKE/build/ObjcIosSmoke.appex/ObjcIosSmoke"
+          plutil -lint "$IOS_SMOKE/build/ObjcIosSmoke.appex/Info.plist"
+          rm -rf "$IOS_SMOKE"
